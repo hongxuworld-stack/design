@@ -1,0 +1,182 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="980" viewBox="0 0 1500 980">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#334155"/>
+    </marker>
+    <style>
+      .title { font: 700 30px Arial, sans-serif; fill: #0f172a; }
+      .subtitle { font: 15px Arial, sans-serif; fill: #475569; }
+      .group { fill: #ffffff; stroke: #cbd5e1; stroke-width: 2; rx: 14; }
+      .box { fill: #ffffff; stroke: #64748b; stroke-width: 2; rx: 10; }
+      .service { fill: #eff6ff; stroke: #2563eb; }
+      .store { fill: #fff7ed; stroke: #ea580c; }
+      .event { fill: #f0fdf4; stroke: #16a34a; }
+      .ml { fill: #f5f3ff; stroke: #7c3aed; }
+      .label { font: 700 16px Arial, sans-serif; fill: #0f172a; }
+      .small { font: 13px Arial, sans-serif; fill: #334155; }
+      .tiny { font: 12px Arial, sans-serif; fill: #475569; }
+      .section { font: 700 18px Arial, sans-serif; fill: #1e293b; }
+      .arrow { stroke: #334155; stroke-width: 2.1; fill: none; marker-end: url(#arrow); }
+      .dash { stroke-dasharray: 7 6; }
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="1500" height="980" fill="#f8fafc"/>
+  <text x="48" y="52" class="title">Ads Ranking System - High-Level Design</text>
+  <text x="48" y="78" class="subtitle">Whiteboard-friendly architecture: online serving path, supporting stores, event feedback loop, and offline ML/reporting.</text>
+
+  <rect x="40" y="110" width="1420" height="390" class="group"/>
+  <text x="62" y="140" class="section">Online Serving</text>
+
+  <rect x="72" y="175" width="150" height="76" class="box service"/>
+  <text x="147" y="206" text-anchor="middle" class="label">Client</text>
+  <text x="147" y="229" text-anchor="middle" class="small">app / web</text>
+
+  <rect x="272" y="175" width="160" height="76" class="box service"/>
+  <text x="352" y="206" text-anchor="middle" class="label">Ads Gateway</text>
+  <text x="352" y="229" text-anchor="middle" class="small">auth, rate limit</text>
+
+  <rect x="482" y="175" width="210" height="76" class="box service"/>
+  <text x="587" y="206" text-anchor="middle" class="label">Ad Serving</text>
+  <text x="587" y="229" text-anchor="middle" class="small">orchestrator</text>
+
+  <rect x="772" y="138" width="190" height="68" class="box service"/>
+  <text x="867" y="165" text-anchor="middle" class="label">Eligibility</text>
+  <text x="867" y="187" text-anchor="middle" class="small">policy, budget, privacy</text>
+
+  <rect x="772" y="228" width="190" height="68" class="box service"/>
+  <text x="867" y="255" text-anchor="middle" class="label">Candidate Gen</text>
+  <text x="867" y="277" text-anchor="middle" class="small">retrieve candidates</text>
+
+  <rect x="772" y="318" width="190" height="68" class="box service"/>
+  <text x="867" y="345" text-anchor="middle" class="label">Light Ranker</text>
+  <text x="867" y="367" text-anchor="middle" class="small">cheap scoring</text>
+
+  <rect x="1012" y="138" width="190" height="68" class="box service"/>
+  <text x="1107" y="165" text-anchor="middle" class="label">Feature Service</text>
+  <text x="1107" y="187" text-anchor="middle" class="small">batch feature read</text>
+
+  <rect x="1012" y="228" width="190" height="68" class="box ml"/>
+  <text x="1107" y="255" text-anchor="middle" class="label">Heavy Ranker</text>
+  <text x="1107" y="277" text-anchor="middle" class="small">model inference</text>
+
+  <rect x="1012" y="318" width="190" height="68" class="box service"/>
+  <text x="1107" y="345" text-anchor="middle" class="label">Auction</text>
+  <text x="1107" y="367" text-anchor="middle" class="small">bid, quality, pacing</text>
+
+  <rect x="1252" y="228" width="170" height="68" class="box service"/>
+  <text x="1337" y="255" text-anchor="middle" class="label">Token Service</text>
+  <text x="1337" y="277" text-anchor="middle" class="small">signed receipts</text>
+
+  <path class="arrow" d="M222 213 H272"/>
+  <path class="arrow" d="M432 213 H482"/>
+  <path class="arrow" d="M692 213 H735 V172 H772"/>
+  <path class="arrow" d="M692 213 H735 V262 H772"/>
+  <path class="arrow" d="M692 213 H735 V352 H772"/>
+  <path class="arrow" d="M962 172 H1012"/>
+  <path class="arrow" d="M962 262 H1012"/>
+  <path class="arrow" d="M962 352 H1012"/>
+  <path class="arrow" d="M1202 262 H1252"/>
+  <path class="arrow" d="M1337 296 V445 H147 V251"/>
+  <text x="1242" y="435" class="tiny">ranked ads + tracking tokens</text>
+
+  <rect x="70" y="410" width="180" height="62" class="box store"/>
+  <text x="160" y="435" text-anchor="middle" class="label">ServingDecision</text>
+  <text x="160" y="456" text-anchor="middle" class="small">TTL store</text>
+
+  <rect x="310" y="410" width="180" height="62" class="box store"/>
+  <text x="400" y="435" text-anchor="middle" class="label">Campaign Cache</text>
+  <text x="400" y="456" text-anchor="middle" class="small">active metadata</text>
+
+  <rect x="550" y="410" width="180" height="62" class="box store"/>
+  <text x="640" y="435" text-anchor="middle" class="label">Targeting Index</text>
+  <text x="640" y="456" text-anchor="middle" class="small">inverted / search</text>
+
+  <rect x="790" y="410" width="180" height="62" class="box store"/>
+  <text x="880" y="435" text-anchor="middle" class="label">Feature Store</text>
+  <text x="880" y="456" text-anchor="middle" class="small">online KV</text>
+
+  <rect x="1030" y="410" width="180" height="62" class="box store"/>
+  <text x="1120" y="435" text-anchor="middle" class="label">Budget State</text>
+  <text x="1120" y="456" text-anchor="middle" class="small">spend + pacing</text>
+
+  <rect x="1270" y="410" width="150" height="62" class="box ml"/>
+  <text x="1345" y="435" text-anchor="middle" class="label">Model Server</text>
+  <text x="1345" y="456" text-anchor="middle" class="small">pCTR / pCVR</text>
+
+  <path class="arrow dash" d="M1337 296 V392 H160 V410"/>
+  <path class="arrow dash" d="M867 138 V110 H400 V410"/>
+  <path class="arrow dash" d="M867 296 V395 H640 V410"/>
+  <path class="arrow dash" d="M1107 206 V392 H880 V410"/>
+  <path class="arrow dash" d="M1107 386 V401 H1120 V410"/>
+  <path class="arrow dash" d="M1107 296 V392 H1345 V410"/>
+
+  <rect x="40" y="535" width="1420" height="205" class="group"/>
+  <text x="62" y="565" class="section">Event Feedback and Real-Time State</text>
+
+  <rect x="72" y="610" width="170" height="70" class="box event"/>
+  <text x="157" y="638" text-anchor="middle" class="label">Event Collector</text>
+  <text x="157" y="660" text-anchor="middle" class="small">token validation</text>
+
+  <rect x="302" y="610" width="140" height="70" class="box event"/>
+  <text x="372" y="638" text-anchor="middle" class="label">Kafka</text>
+  <text x="372" y="660" text-anchor="middle" class="small">event log</text>
+
+  <rect x="502" y="610" width="170" height="70" class="box event"/>
+  <text x="587" y="638" text-anchor="middle" class="label">Flink</text>
+  <text x="587" y="660" text-anchor="middle" class="small">dedupe, join, agg</text>
+
+  <rect x="732" y="610" width="180" height="70" class="box store"/>
+  <text x="822" y="638" text-anchor="middle" class="label">Budget Updates</text>
+  <text x="822" y="660" text-anchor="middle" class="small">live spend</text>
+
+  <rect x="972" y="610" width="180" height="70" class="box store"/>
+  <text x="1062" y="638" text-anchor="middle" class="label">FreqCap Store</text>
+  <text x="1062" y="660" text-anchor="middle" class="small">user/ad windows</text>
+
+  <rect x="1212" y="610" width="180" height="70" class="box store"/>
+  <text x="1302" y="638" text-anchor="middle" class="label">Real-Time Features</text>
+  <text x="1302" y="660" text-anchor="middle" class="small">recent CTR/actions</text>
+
+  <path class="arrow" d="M242 645 H302"/>
+  <path class="arrow" d="M442 645 H502"/>
+  <path class="arrow" d="M672 645 H732"/>
+  <path class="arrow" d="M912 645 H972"/>
+  <path class="arrow" d="M1152 645 H1212"/>
+
+  <path class="arrow dash" d="M822 610 V518 H1120 V472"/>
+  <path class="arrow dash" d="M1062 610 V520 H867 V386"/>
+  <path class="arrow dash" d="M1302 610 V520 H880 V472"/>
+  <path class="arrow dash" d="M147 251 V525 H157 V610"/>
+  <text x="165" y="525" class="tiny">impression/click/conversion</text>
+
+  <rect x="40" y="775" width="1420" height="155" class="group"/>
+  <text x="62" y="805" class="section">Offline Training and Reporting</text>
+
+  <rect x="170" y="840" width="180" height="62" class="box store"/>
+  <text x="260" y="865" text-anchor="middle" class="label">Data Lake</text>
+  <text x="260" y="886" text-anchor="middle" class="small">raw + curated events</text>
+
+  <rect x="440" y="840" width="180" height="62" class="box ml"/>
+  <text x="530" y="865" text-anchor="middle" class="label">Training Jobs</text>
+  <text x="530" y="886" text-anchor="middle" class="small">labels + features</text>
+
+  <rect x="710" y="840" width="180" height="62" class="box ml"/>
+  <text x="800" y="865" text-anchor="middle" class="label">Model Registry</text>
+  <text x="800" y="886" text-anchor="middle" class="small">versioned models</text>
+
+  <rect x="980" y="840" width="180" height="62" class="box store"/>
+  <text x="1070" y="865" text-anchor="middle" class="label">Analytics Store</text>
+  <text x="1070" y="886" text-anchor="middle" class="small">Pinot / Druid</text>
+
+  <rect x="1250" y="840" width="150" height="62" class="box service"/>
+  <text x="1325" y="865" text-anchor="middle" class="label">Reports</text>
+  <text x="1325" y="886" text-anchor="middle" class="small">advertisers</text>
+
+  <path class="arrow dash" d="M587 680 V760 H260 V840"/>
+  <path class="arrow" d="M350 871 H440"/>
+  <path class="arrow" d="M620 871 H710"/>
+  <path class="arrow dash" d="M800 840 V760 H1345 V472"/>
+  <path class="arrow" d="M890 871 H980"/>
+  <path class="arrow" d="M1160 871 H1250"/>
+</svg>
