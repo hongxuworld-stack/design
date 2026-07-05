@@ -1,0 +1,257 @@
+广告排序系统设计 Ads Ranking System Design
+
+参考流程:
+- Requirements: ~5 分钟
+- Core Entities: ~2 分钟
+- API / System Interface: ~5 分钟
+- Optional Data Flow: ~5 分钟
+- High Level Design: ~10-15 分钟
+- Deep Dive: ~10 分钟
+
+问题定义
+设计一个广告排序系统。系统需要在用户访问信息流、搜索结果页、视频页等场景时，选择符合条件的广告，预测广告对用户和广告主的价值，完成排序和竞价，并在低延迟下返回广告。同时，系统需要收集曝光、点击、转化等反馈事件，用于计费、分析和模型训练。
+
+1. Requirements (~5 分钟)
+
+Functional Requirements
+- 客户端可以请求某个广告位下的排序广告。
+- 广告主可以创建 campaign、广告、定向规则、出价、预算和素材。
+- 系统需要过滤不符合条件的广告，例如定向不匹配、预算不足、广告审核未通过、频控超限、campaign 暂停等。
+- 系统需要根据用户响应概率和广告主价值对广告进行排序。
+- 系统需要记录曝光、点击、转化和竞价决策日志，用于分析、计费和模型训练。
+
+广告主对象解释
+- Campaign: 广告活动，表示广告主的一次营销目标，通常定义目标、投放时间、状态和预算。例如 "Nike Summer Running Shoes 2026"，目标可以是购买、app下载或品牌曝光。
+- Ads: 实际参与投放和排序的广告单元。一个 campaign 下面可以有多个 ad，每个 ad 可以面向不同人群、使用不同表达或落地页。
+- Targeting Rules: 定向规则，决定广告可以展示给谁、在什么上下文展示。常见规则包括地理位置、设备、语言、广告位、关键词、兴趣、人群范围和隐私/consent 限制。
+- Bids: 出价，表示广告主愿意为某个结果支付多少钱，例如 CPC、CPM、CPA 或转化价值。排序时通常会把 bid 和预测概率结合，例如 bid * pCTR。
+- Budgets: 预算，限制 campaign 或账户最多能花多少钱，例如 daily budget 或 lifetime budget。预算还会和 pacing 配合，避免系统过早花完整天预算。
+- Creatives: 素材，也就是用户最终看到的内容，包括标题、文案、图片、视频、CTA 和落地页。素材会影响审核、质量分、CTR，也会作为最终响应返回给客户端。
+
+Out of Scope
+- 完整广告主后台 UI。
+- 广告素材审核系统的具体 ML 实现。
+- 支付系统内部实现。
+- 完整归因系统，只保留转化事件接入和异步 join。
+
+Non-functional Requirements
+- 低延迟: 在线广告请求 p99 控制在 100-150 ms 以内，排序服务本身最好在 50 ms 以内。
+- 高可用: 广告 serving 链路需要优先保证可用，训练、分析或部分特征服务失败时不能直接拖垮主链路。
+- 数据新鲜度: 预算、campaign 状态、pacing、风控和 policy 信号需要在秒级到分钟级更新。
+- 可扩展性: 支持高 QPS 和流量峰值。广告请求是读多写少，事件日志写入量很大。
+- 正确性: 需要避免预算超花，严格遵守定向、隐私、频控和计费规则。
+- 可观测性: 每一次广告返回都要能追踪候选、过滤原因、特征版本、模型版本、分数和竞价结果。
+
+Capacity Estimation
+- 面试中只做会影响设计的估算。
+- 假设:
+  - 100M DAU。
+  - 每个用户每天 50 次广告机会。
+  - 每天 5B 次广告请求，平均约 58K QPS，峰值可能是 3-5 倍。
+  - 每次请求召回后可能需要排序 100-1000 个候选广告。
+- 设计影响:
+  - 在线链路不能扫描所有广告。
+  - 召回、特征、campaign 元数据需要索引和缓存。
+  - 曝光、点击、转化等事件必须走异步 durable log，不能同步写分析库。
+
+2. Core Entities (~2 分钟)
+
+- User: 用户 id、兴趣画像、粗粒度人口属性、隐私和 consent 标记。
+- AdRequest: 广告位、设备、地理位置、搜索词或页面上下文、时间戳。
+- Advertiser: 广告主。
+- Campaign: 状态、目标、定向规则、预算、pacing、出价策略。
+- AdGroup / AdSet: 更细粒度的定向和出价单元。
+- Creative / Ad: 文案、图片、视频、落地页、审核状态。
+- CandidateAd: 候选广告及其 campaign 元数据。
+- Feature: 用户特征、广告特征、上下文特征、历史表现、实时计数器。
+- Prediction: pCTR、pCVR、质量分、相关性分。
+- AuctionResult: 排序结果、价格、过滤和竞价 reason code。
+- Event: 曝光、点击、转化、花费、风控信号。
+
+3. API / System Interface (~5 分钟)
+
+在线广告请求 API
+
+POST /v1/ads:rank
+body:
+{
+  "placement_id": "feed_inline_1",
+  "user_id": "u123",
+  "context": {
+    "device": "ios",
+    "geo": "US-CA",
+    "query": "running shoes",
+    "page_category": "sports"
+  },
+  "limit": 3
+}
+
+response:
+{
+  "request_id": "req_abc",
+  "ads": [
+    {
+      "ad_id": "ad_1",
+      "creative": {...},
+      "rank": 1,
+      "tracking": {
+        "impression_url": "...",
+        "click_url": "..."
+      }
+    }
+  ]
+}
+
+广告主相关 API
+- POST /v1/campaigns
+- PATCH /v1/campaigns/{campaign_id}
+- POST /v1/ads
+- PATCH /v1/ads/{ad_id}
+
+事件 API
+- POST /v1/events/impression
+- POST /v1/events/click
+- POST /v1/events/conversion
+
+内部 RPC
+- CandidateRetrievalService.GetCandidates(request_context)
+- FeatureService.GetOnlineFeatures(user, candidates, context)
+- ModelServingService.Predict(features)
+- AuctionService.RunAuction(candidates, predictions)
+- BudgetService.CheckAndReserve(campaigns)
+
+4. Optional Data Flow (~5 分钟)
+
+在线 serving 流程
+1. Client 发送广告请求，包含广告位和上下文。
+2. Ad Gateway 做鉴权、校验隐私/consent，并生成 request_id。
+3. Candidate Retrieval 从定向索引中召回候选广告。
+4. Filtering Service 过滤 policy、campaign 状态、预算、pacing、频控和用户安全规则不满足的广告。
+5. Feature Service 获取用户、上下文、广告和实时统计特征。
+6. Model Serving 预测 pCTR、pCVR、相关性和质量分。
+7. Auction Service 根据预测值、出价、质量分和预算规则完成排序和定价。
+8. 返回 top ads 和 tracking metadata。
+9. 曝光、点击、转化事件异步写入 Kafka。
+
+离线和近实时学习流程
+1. Event Collector 收集曝光、点击、转化、花费和完整决策日志，写入 Kafka。
+2. Stream Processing 更新实时计数器，例如预算花费、频控、campaign pacing、近期 CTR/CVR。
+3. Data Lake 存储历史事件和训练标签。
+4. Feature Pipeline 生成离线训练特征。
+5. Training Job 训练广告排序模型。
+6. Model Registry 校验、管理和发布模型版本。
+7. A/B Testing 按流量比例逐步灰度新模型。
+
+5. High Level Design (~10-15 分钟)
+
+在线 serving 架构
+
+Client
+  -> Ad Gateway / Load Balancer
+  -> Ads Ranking Orchestrator
+      -> User/Profile Store or Cache
+      -> Candidate Retrieval Service
+          -> Targeting Index
+          -> Campaign Metadata Store
+      -> Filtering Service
+          -> Policy Cache
+          -> Budget/Pacing Store
+          -> Frequency Cap Store
+      -> Feature Service
+          -> Online Feature Store
+          -> Redis / in-memory hot feature cache
+      -> Model Serving Service
+      -> Auction Service
+  -> Response with ranked ads
+
+异步事件和训练架构
+
+Tracking Endpoints
+  -> Event Collector
+  -> Kafka
+      -> Stream Processing: 更新预算、pacing、频控、在线特征
+      -> Data Lake / Warehouse: 分析、计费、训练
+      -> Fraud Detection / Policy Signals
+
+存储选择
+- Campaign DB: 使用关系型数据库或支持事务的分片存储，保存 campaign、广告、预算和广告主配置。
+- Targeting Index: 按 geo、device、keyword、interest、placement、campaign status 建倒排索引。
+- Online Feature Store: 低延迟 KV 存储，例如 Redis、Cassandra 或 DynamoDB 风格系统。
+- Budget/Pacing Store: 支持原子计数或 token bucket 的低延迟计数系统。
+- Event Log: Kafka 或类似 durable stream。
+- Data Lake: S3/HDFS 风格对象存储，加上 warehouse 做分析和训练。
+- Model Registry: 保存模型版本、指标、灰度配置和回滚信息。
+
+排序和竞价公式
+- 第一阶段召回: 根据定向和资格规则找出候选广告。
+- 第二阶段排序:
+  - score = bid * pCTR * pCVR/value_multiplier * quality_adjustment
+  - CPC 广告: expected_value = bid_per_click * pCTR
+  - CPA/ROAS 广告: expected_value = conversion_value * pCTR * pCVR
+- 竞价:
+  - 按广告主期望价值和质量分排序。
+  - 可以使用 generalized second price 或 VCG 风格机制。
+  - 需要强制执行 reserve price、预算、pacing 和 marketplace 规则。
+
+6. Deep Dives (~10 分钟)
+
+Deep Dive 1: 低延迟排序
+- 问题: 每次请求需要对数百到上千个候选广告取特征和打分，容易超出延迟预算。
+- 方案:
+  - 两阶段排序: 快速召回 + 轻量 first-pass model + 对 top N 使用更复杂模型。
+  - campaign 元数据、policy 状态、定向索引放在内存或热缓存。
+  - 批量获取特征，批量调用模型预测。
+  - first-pass 可以使用轻量模型，例如线性模型、GBDT 或蒸馏模型。
+  - 部分特征超时时使用默认值或 stale feature，并记录 fallback。
+
+Deep Dive 2: 候选召回和过滤
+- 问题: 不能对每个请求扫描所有 active ads。
+- 方案:
+  - 为 geo、language、device、placement、keyword、interest 等定向维度建立倒排索引。
+  - 对硬条件做 intersection，对宽泛定向做 union，再限制每个来源的候选数量。
+  - 在模型打分前先做硬过滤: policy、预算、campaign 状态、屏蔽类目、隐私 consent。
+  - 保存过滤 reason code，方便广告主调试和系统审计。
+
+Deep Dive 3: 预算、Pacing 和防超花
+- 问题: 热门 campaign 可能被很多 ranking server 同时选中，导致预算超花。
+- 方案:
+  - 用近实时 spend counter 追踪曝光、点击或转化计费事件。
+  - 对严格预算使用预算预留或 token bucket。
+  - 对热门 campaign 的 counter 分片，或者让同一个 campaign 的预算更新落到固定 owner partition。
+  - Pacing Service 按时间窗口计算可花额度，避免早上就花完整天预算。
+  - serving 链路可以为了可用性接受轻微 stale counter，但在接近预算上限时要使用保守 buffer。
+
+Deep Dive 4: 事件日志、归因和训练反馈
+- 问题: 排序质量依赖可靠的标签和完整决策日志。
+- 方案:
+  - 记录完整 auction decision log: 候选集合、过滤原因、特征版本、模型版本、分数、价格。
+  - 使用 event_id、request_id、ad_id 去重。
+  - 异步 join 曝光、点击和转化。
+  - 计费关键链路和探索性分析链路分开。
+  - 转化标签有延迟，需要支持 delayed label，并谨慎处理负采样。
+
+Deep Dive 5: 模型发布和实验
+- 问题: 一个坏模型会快速影响收入和用户体验。
+- 方案:
+  - Model Registry 保存模型版本、离线指标、延迟、内存占用和安全检查结果。
+  - 按流量比例、地域或广告位做 canary rollout。
+  - A/B 指标包括 CTR、CVR、收入、广告主 ROI、hide/report rate、latency、fill rate。
+  - 配置中心支持按模型版本快速回滚。
+  - 监控 offline training 和 online serving 的 feature skew。
+
+Deep Dive 6: 可靠性和降级
+- Candidate Retrieval 失败: 返回 house ads、organic fallback，或缓存的热门广告。
+- Feature Store 超时: 使用默认特征或 stale feature。
+- Model Serving 失败: 使用基于历史 CTR 和 bid 的 baseline 排序。
+- Kafka/Event 延迟: serving 继续，但需要报警，因为预算、训练和频控会变旧。
+- Budget Service 不可用: 使用保守 allowlist/denylist cache，降低超花风险。
+
+关键权衡
+- 准确率 vs 延迟: 更复杂模型通常更准，但会影响 p99。
+- 新鲜度 vs 可用性: 严格实时预算更准确，但会增加 contention 和 serving 延迟。
+- 一致性 vs 扩展性: campaign 配置和预算需要更强正确性，排序特征可以接受短暂 stale。
+- 收入 vs 用户体验: 排序不能只看 bid，还要考虑相关性、质量分和用户负反馈。
+- 隐私 vs 个性化: 特征和定向必须遵守 consent 和隐私规则。
+
+面试中可以这样总结
+"我会把这个系统拆成在线 serving 链路和异步反馈链路。在线链路负责从定向索引召回候选广告，过滤 policy、预算、频控等硬约束，获取实时特征，用模型预测 pCTR/pCVR，再结合 bid 和质量分完成竞价排序，最后返回 top ads。异步链路通过 Kafka 收集曝光、点击、转化和完整决策日志，更新预算、pacing、频控、实时特征，并支持计费、分析和模型训练。这个题最值得 deep dive 的地方是候选召回、低延迟特征和模型服务、预算防超花，以及完整日志如何支撑训练和计费。"

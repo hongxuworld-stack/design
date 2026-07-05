@@ -1,6 +1,257 @@
-Requirements: 5 min
-Core Entities: 2 min
-API: 5 min
-Optional Data Flow: 5 min
-High Level Design: 10–15 min
-Deep Dive: 10 min
+Ads Ranking System Design
+
+Reference flow from Hello Interview:
+Requirements: ~5 min
+Core Entities: ~2 min
+API / System Interface: ~5 min
+Optional Data Flow: ~5 min
+High Level Design: ~10-15 min
+Deep Dive: ~10 min
+
+Problem
+Design an ads ranking system that selects and ranks ads for a user request, such as a feed page, search result page, or video page. The system should choose eligible ads, estimate their value/relevance, run an auction, return ranked ads with low latency, and collect feedback for model improvement and billing.
+
+1. Requirements (~5 min)
+
+Functional Requirements
+- Clients should be able to request ranked ads for a placement and user/context.
+- Advertisers should be able to create campaigns, ads, targeting rules, bids, budgets, and creatives.
+- The system should filter ineligible ads by targeting, budget, policy, pacing, frequency cap, and campaign status.
+- The system should rank ads using predicted user response and advertiser value.
+- The system should log impressions, clicks, conversions, and auction decisions for analytics, billing, and model training.
+
+Advertiser Object Breakdown
+- Campaigns: high-level advertising initiatives that define the business goal, schedule, status, and budget. Example: "Nike Summer Running Shoes 2026" with an objective like purchases or app installs.
+- Ads: the actual ad units that participate in serving and ranking. A campaign can contain many ads, and each ad can target a different audience or message.
+- Targeting rules: eligibility rules that decide who can see an ad and in what context. Examples include geo, device, language, placement, keyword, interest, age range, and privacy/consent constraints.
+- Bids: how much the advertiser is willing to pay for an outcome, such as CPC, CPM, CPA, or conversion value. Ranking usually combines bid with predicted user response, such as bid * pCTR.
+- Budgets: spend limits at campaign or account level, such as daily budget or lifetime budget. Budgets also interact with pacing so the system does not spend everything too early.
+- Creatives: the user-facing assets, such as headline, body text, image, video, CTA, and landing page. Creatives affect policy review, quality score, CTR, and the final response returned to the client.
+
+Out of Scope
+- Full advertiser UI.
+- Creative review ML details.
+- Payment processing internals.
+- Full attribution product, except conversion event ingestion.
+
+Non-functional Requirements
+- Low latency: ad serving p99 under 100-150 ms for online ranking; ideally ranking service budget under 50 ms.
+- High availability: serving path should remain available even if training, analytics, or some feature pipelines fail.
+- Freshness: budget, campaign status, pacing, and fraud/policy signals should be updated within seconds to minutes.
+- Scalability: support high QPS, bursty traffic, and read-heavy serving. Writes are mostly campaign updates and event logs.
+- Correctness where it matters: avoid overspending budgets, respect targeting/privacy rules, and prevent duplicate billing.
+- Observability: every served ad needs traceable decision logs for debugging ranking, auction, and billing.
+
+Capacity Estimation
+- Do only useful math in the interview.
+- Example assumptions:
+  - 100M DAU.
+  - 50 ad opportunities per user per day.
+  - 5B ad requests/day, average about 58K QPS, peak 3-5x.
+  - Need to rank maybe 100-1000 candidates per request after retrieval.
+- Design implication:
+  - Online path must avoid scanning all ads.
+  - Candidate retrieval and features must be indexed/cached.
+  - Events must go through durable streaming, not synchronous analytics writes.
+
+2. Core Entities (~2 min)
+
+- User: user id, coarse demographics/interests if allowed, privacy/consent flags.
+- AdRequest: placement, device, geo, page/search context, timestamp.
+- Advertiser.
+- Campaign: status, objective, targeting rules, budget, pacing, bid strategy.
+- AdGroup / AdSet: targeting and bid granularity.
+- Creative / Ad: text/image/video, landing page, policy status.
+- CandidateAd: ad plus campaign metadata and features.
+- Feature: user, ad, context, historical performance, real-time counters.
+- Prediction: pCTR, pCVR, quality score, relevance score.
+- AuctionResult: ranked ads, price, reason codes.
+- Event: impression, click, conversion, spend, fraud signal.
+
+3. API / System Interface (~5 min)
+
+External serving API
+
+POST /v1/ads:rank
+body:
+{
+  "placement_id": "feed_inline_1",
+  "user_id": "u123",
+  "context": {
+    "device": "ios",
+    "geo": "US-CA",
+    "query": "running shoes",
+    "page_category": "sports"
+  },
+  "limit": 3
+}
+
+response:
+{
+  "request_id": "req_abc",
+  "ads": [
+    {
+      "ad_id": "ad_1",
+      "creative": {...},
+      "rank": 1,
+      "tracking": {
+        "impression_url": "...",
+        "click_url": "..."
+      }
+    }
+  ]
+}
+
+Advertiser / campaign APIs
+- POST /v1/campaigns
+- PATCH /v1/campaigns/{campaign_id}
+- POST /v1/ads
+- PATCH /v1/ads/{ad_id}
+
+Event APIs
+- POST /v1/events/impression
+- POST /v1/events/click
+- POST /v1/events/conversion
+
+Internal RPCs
+- CandidateRetrievalService.GetCandidates(request_context)
+- FeatureService.GetOnlineFeatures(user, candidates, context)
+- ModelServingService.Predict(features)
+- AuctionService.RunAuction(candidates, predictions)
+- BudgetService.CheckAndReserve(campaigns)
+
+4. Optional Data Flow (~5 min)
+
+Online serving flow
+1. Client sends ad request with placement and context.
+2. Ad Gateway authenticates, validates privacy/consent, creates request_id.
+3. Candidate Retrieval finds eligible ads from targeting indexes.
+4. Filter Service removes ads blocked by policy, campaign status, budget, pacing, frequency cap, and user safety rules.
+5. Feature Service fetches online features for user, context, and candidate ads.
+6. Model Serving predicts pCTR/pCVR/relevance/quality.
+7. Auction and Ranking computes expected value and price.
+8. Response returns top ads and tracking metadata.
+9. Impression/click/conversion events are written asynchronously to Kafka.
+
+Offline / nearline learning flow
+1. Event collectors write impressions, clicks, conversions, spend, and decision logs to Kafka.
+2. Stream processors update real-time counters: budget spend, frequency caps, campaign pacing, recent CTR/CVR.
+3. Data lake stores historical events and labels.
+4. Feature pipelines build offline training features.
+5. Training jobs produce ranking models.
+6. Model registry validates and deploys models to online model serving.
+7. A/B testing gradually rolls out model versions.
+
+5. High Level Design (~10-15 min)
+
+Serving path
+
+Client
+  -> Ad Gateway / Load Balancer
+  -> Ads Ranking Orchestrator
+      -> User/Profile Store or Cache
+      -> Candidate Retrieval Service
+          -> Targeting Index
+          -> Campaign Metadata Store
+      -> Filtering Service
+          -> Policy Cache
+          -> Budget/Pacing Store
+          -> Frequency Cap Store
+      -> Feature Service
+          -> Online Feature Store
+          -> Redis / in-memory hot feature cache
+      -> Model Serving Service
+      -> Auction Service
+  -> Response with ranked ads
+
+Async path
+
+Tracking endpoints
+  -> Event Collector
+  -> Kafka
+      -> Stream processing: budget, pacing, frequency cap, online features
+      -> Data lake / warehouse: analytics, billing, training
+      -> Fraud detection and policy signals
+
+Storage choices
+- Campaign DB: strongly consistent relational DB or sharded transactional store for campaign metadata and advertiser writes.
+- Targeting Index: inverted indexes by geo, device, keyword, interest, placement, campaign status.
+- Online Feature Store: low-latency KV store, such as Redis/Cassandra/DynamoDB-style storage.
+- Budget/Pacing Store: low-latency counters with atomic reservation or partitioned campaign counters.
+- Event Log: Kafka or equivalent durable stream.
+- Data Lake: S3/HDFS-style object store plus warehouse for analytics/training.
+- Model Registry: stores model versions, metrics, rollout configs.
+
+Ranking formula
+- First pass retrieval: broad eligibility and targeting.
+- Second pass ranking:
+  - score = bid * pCTR * pCVR/value_multiplier * quality_adjustment
+  - For CPC ads: expected_value = bid_per_click * pCTR
+  - For CPA/ROAS ads: expected_value = conversion_value * pCTR * pCVR
+- Auction:
+  - Rank by expected advertiser value plus quality.
+  - Price with generalized second price or VCG-style auction depending on product complexity.
+  - Enforce reserve price, budget, pacing, and marketplace rules.
+
+6. Deep Dives (~10 min)
+
+Deep Dive 1: Low Latency Ranking
+- Problem: Ranking hundreds or thousands of ads with fresh features can exceed latency budget.
+- Approach:
+  - Two-stage ranking: fast retrieval + lightweight first-pass model + heavier final model for top N.
+  - Keep campaign metadata, policy status, and targeting indexes in memory or hot cache.
+  - Batch feature lookups and model predictions per request.
+  - Use model distillation or tree/linear models for first pass; use heavier neural model only for top candidates if latency allows.
+  - Degrade gracefully: if some feature group times out, use default/backfilled features and log fallback.
+
+Deep Dive 2: Candidate Retrieval and Filtering
+- Problem: Cannot scan all active ads per request.
+- Approach:
+  - Maintain inverted indexes for targeting dimensions: geo, language, device, placement, keyword, interest.
+  - Intersect indexes for hard constraints, union for broad targeting, then cap candidates per source.
+  - Apply hard filters before model scoring: policy, budget, campaign status, blocked categories, privacy consent.
+  - Keep a reason code for filtered ads for advertiser debugging and system audits.
+
+Deep Dive 3: Budget, Pacing, and Overspend
+- Problem: Highly popular campaigns can overspend if many rankers serve them concurrently.
+- Approach:
+  - Use near-real-time spend counters updated from impression/click billing events.
+  - For strict budgets, reserve spend before serving or use token buckets per campaign.
+  - Shard hot campaign counters and aggregate carefully, or route a campaign's budget updates through a single owner partition.
+  - Pacing service computes allowance by time window so a campaign does not spend entire daily budget early.
+  - Serving path can use slightly stale counters for availability, but add conservative buffers near budget exhaustion.
+
+Deep Dive 4: Event Logging, Attribution, and Training Feedback
+- Problem: Ranking quality depends on unbiased, reliable labels.
+- Approach:
+  - Log full auction decision data: candidates considered, features version, model version, scores, prices, filters, request_id.
+  - Deduplicate events using event_id/request_id/ad_id.
+  - Join impressions, clicks, and conversions asynchronously.
+  - Separate billing-critical pipelines from exploratory analytics.
+  - Use delayed labels for conversions and handle negative sampling carefully.
+
+Deep Dive 5: Model Deployment and Experimentation
+- Problem: Bad models can damage revenue and user experience quickly.
+- Approach:
+  - Model registry with validation gates: offline AUC/calibration, latency, memory, fairness/safety checks.
+  - Canary rollout by traffic percentage, region, or placement.
+  - A/B metrics: CTR, CVR, revenue, advertiser ROI, hide/report rate, latency, fill rate.
+  - Support rollback by model version in config.
+  - Monitor feature skew between offline training and online serving.
+
+Deep Dive 6: Reliability and Fallbacks
+- Candidate retrieval failure: return house ads, organic content, or cached popular campaigns for the placement.
+- Feature store timeout: use default or stale features.
+- Model serving failure: use simple baseline score from historical CTR and bid.
+- Kafka/event delay: continue serving, but alert because billing/training/frequency caps may become stale.
+- Budget service unavailable: use conservative allowlist/denylist cache and reduce spend risk.
+
+Key Tradeoffs
+- Accuracy vs latency: deeper models improve relevance but may miss p99 targets.
+- Freshness vs availability: strict real-time budgets reduce overspend but can add contention.
+- Consistency vs scale: campaign metadata needs correctness; ranking features tolerate staleness.
+- Revenue vs user experience: ranking should include quality/relevance, not only bid.
+- Privacy vs personalization: use consent-aware features and avoid forbidden targeting dimensions.
+
+What I would say in an interview
+"I will optimize the online path for low latency and availability. The core serving request retrieves eligible candidates from targeting indexes, filters by policy/budget/frequency caps, fetches online features, scores candidates with a model, runs an auction, and returns the top ads. All feedback events go through Kafka so budget, pacing, feature freshness, analytics, billing, and training can update asynchronously. The hardest parts are candidate retrieval at scale, fresh budget/pacing without overspend, low-latency feature/model serving, and reliable decision logging for model improvement and billing."
